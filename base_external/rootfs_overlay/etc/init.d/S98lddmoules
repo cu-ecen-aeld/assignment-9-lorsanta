@@ -1,0 +1,164 @@
+#!/bin/sh
+module_scull="scull"
+device_scull="scull"
+
+module_faulty="faulty"
+device_faulty="faulty"
+
+module_hello="hello"
+
+mode="664"
+
+# load scull_driver
+function load_scull_dev()
+{
+    # Group: since distributions do it differently, look for wheel or use staff
+    if grep -q '^staff:' /etc/group; then
+        group="staff"
+    else
+        group="wheel"
+    fi
+
+    major=$1
+
+    # Remove stale nodes and replace them, then give gid and perms
+    # Usually the script is shorter, it's scull that has several devices in it.
+    rm -f /dev/${device_scull}[0-3]
+    mknod /dev/${device_scull}0 c $major 0
+    mknod /dev/${device_scull}1 c $major 1
+    mknod /dev/${device_scull}2 c $major 2
+    mknod /dev/${device_scull}3 c $major 3
+    ln -sf ${device_scull}0 /dev/${device_scull}
+    chgrp $group /dev/${device_scull}[0-3] 
+    chmod $mode  /dev/${device_scull}[0-3]
+
+    rm -f /dev/${device_scull}pipe[0-3]
+    mknod /dev/${device_scull}pipe0 c $major 4
+    mknod /dev/${device_scull}pipe1 c $major 5
+    mknod /dev/${device_scull}pipe2 c $major 6
+    mknod /dev/${device_scull}pipe3 c $major 7
+    ln -sf ${device_scull}pipe0 /dev/${device_scull}pipe
+    chgrp $group /dev/${device_scull}pipe[0-3] 
+    chmod $mode  /dev/${device_scull}pipe[0-3]
+
+    rm -f /dev/${device_scull}single
+    mknod /dev/${device_scull}single  c $major 8
+    chgrp $group /dev/${device_scull}single
+    chmod $mode  /dev/${device_scull}single
+
+    rm -f /dev/${device_scull}uid
+    mknod /dev/${device_scull}uid   c $major 9
+    chgrp $group /dev/${device_scull}uid
+    chmod $mode  /dev/${device_scull}uid
+
+    rm -f /dev/${device_scull}wuid
+    mknod /dev/${device_scull}wuid  c $major 10
+    chgrp $group /dev/${device_scull}wuid
+    chmod $mode  /dev/${device_scull}wuid
+
+    rm -f /dev/${device_scull}priv
+    mknod /dev/${device_scull}priv  c $major 11
+    chgrp $group /dev/${device_scull}priv
+    chmod $mode  /dev/${device_scull}priv
+}
+
+# unload scull_driver
+function unload_scull_dev()
+{
+    # invoke rmmod with all arguments we got
+    rmmod $module_scull $* || exit 1
+
+    # remove stale nodes
+    rm -f /dev/${device_scull} /dev/${device_scull}[0-3] 
+    rm -f /dev/${device_scull}priv
+    rm -f /dev/${device_scull}pipe /dev/${device_scull}pipe[0-3]
+    rm -f /dev/${device_scull}single
+    rm -f /dev/${device_scull}uid
+    rm -f /dev/${device_scull}wuid
+}
+
+# load faulty_driver
+function load_faulty_dev()
+{
+    set -e
+    # Group: since distributions do it differently, look for wheel or use staff
+    # These are groups which correspond to system administrator accounts
+    if grep -q '^staff:' /etc/group; then
+        group="staff"
+    else
+        group="wheel"
+    fi
+
+    major=$1
+    if [ ! -z ${major} ]; then
+        echo "Remove any existing /dev node for /dev/${device_faulty}"
+        rm -f /dev/${device_faulty}
+        echo "Add a node for our device at /dev/${device_faulty} using mknod"
+        mknod /dev/${device_faulty} c $major 0
+        echo "Change group owner to ${group}"
+        chgrp $group /dev/${device_faulty}
+        echo "Change access mode to ${mode}"
+        chmod $mode  /dev/${device_faulty}
+    else
+        echo "No device found in /proc/devices for driver ${module_faulty} (this driver may not allocate a device)"
+    fi
+}
+
+# unload faulty_driver
+function unload_faulty_dev()
+{
+    # invoke rmmod with all arguments we got
+    rmmod $module_faulty || exit 1
+
+    # remove stale nodes
+    rm -f /dev/${device_faulty}
+}
+
+case "$1" in
+	start)
+        echo "Running load ldd drivers daemon"
+
+        # load scull_driver 
+        echo "Load scull driver, exit on failure"
+        insmod /lib/modules/$(uname -r)/extra/$module_scull.ko $* || exit 1
+
+        # retrieve major number
+        echo "Get the major number (allocated with allocate_chrdev_region) from /proc/devices"
+        major=$(awk "\$2==\"$module_scull\" {print \$1}" /proc/devices)
+        echo "scull major number is: ${major}"
+
+        load_scull_dev "$major"
+
+        # load faulty_driver 
+        echo "Load faulty driver, exit on failure"
+        insmod /lib/modules/$(uname -r)/extra/$module_faulty.ko $* || exit 1
+
+        # retrieve major number
+        echo "Get the major number (allocated with allocate_chrdev_region) from /proc/devices"
+        major=$(awk "\$2==\"$module_faulty\" {print \$1}" /proc/devices)
+        echo "scull major number is: ${major}"
+
+        load_faulty_dev "$major"
+
+        # modprobe of hello world
+        cd /lib/modules/$(uname -r)/extra/
+        modprobe $module_hello.ko $* || exit 1
+        ;;
+	stop)
+        echo "Stopping load ldd drivers daemon"
+
+        # basic rmmod of hello driver
+        rmmod /lib/modules/$(uname -r)/extra/$module_hello.ko || exit 1
+
+        # unload faulty_driver
+        echo "Unload faulty driver"
+        unload_faulty_dev
+
+        # unload scull_driver
+        echo "Unload scull driver"
+        unload_scull_dev
+        ;;
+	*)
+		echo "Usage: $0 {start|stop}"
+	exit 1
+esac
