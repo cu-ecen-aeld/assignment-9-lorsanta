@@ -7,6 +7,9 @@ device_faulty="faulty"
 
 module_hello="hello"
 
+module_aesdchar="aesdchar"
+device_aesdchar="aesdchar"
+
 mode="664"
 
 # load scull_driver
@@ -114,9 +117,44 @@ function unload_faulty_dev()
     rm -f /dev/${device_faulty}
 }
 
+function load_aesdchar_dev()
+{
+	if grep -q '^staff:' /etc/group; then
+	    group="staff"
+	else
+	    group="wheel"
+	fi
+
+    major=$1
+    if [ ! -z ${major} ]; then
+		rm -f /dev/${device_aesdchar}
+		mknod /dev/${device_aesdchar} c $major 0
+		chgrp $group /dev/${device_aesdchar}
+		chmod $mode  /dev/${device_aesdchar}
+    fi
+}
+
+function unload_aesdchar_dev()
+{
+	# invoke rmmod with all arguments we got
+	rmmod ${module_aesdchar} || exit 1
+
+	# Remove stale nodes
+
+	rm -f /dev/${device_aesdchar}
+}
+
 case "$1" in
 	start)
         echo "Running load ldd drivers daemon"
+        
+        echo "Load aesdchar driver, exit on failure"
+	    modprobe ${module_aesdchar} || exit 1
+
+        # retrieve major number
+        echo "Get the major number (allocated with allocate_chrdev_region) from /proc/devices"
+		major=$(awk "\$2==\"$module_aesdchar\" {print \$1}" /proc/devices)
+        load_aesdchar_dev $major
 
         # load scull_driver 
         echo "Load scull driver, exit on failure"
@@ -149,6 +187,9 @@ case "$1" in
 
         # basic rmmod of hello driver
         rmmod /lib/modules/$(uname -r)/extra/$module_hello.ko || exit 1
+
+        echo "Unload aesdchar driver"
+        unload_aesdchar_dev
 
         # unload faulty_driver
         echo "Unload faulty driver"
